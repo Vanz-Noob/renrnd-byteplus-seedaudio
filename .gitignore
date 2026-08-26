@@ -1,0 +1,49 @@
+# BytePlus Voice Chat - .gitignore
+
+# Environment & Secrets
+.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.pytest_cache
+
+# Logs
+*.log
+byteaudio.log
+
+# Cloudflare
+cloudflared.exe
+cloudflared*
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+*.zip
+.trae-html-share-packages/
+
+# Dokumentasi build (generated)
+byteplus-voice-chat-prd/_shared/

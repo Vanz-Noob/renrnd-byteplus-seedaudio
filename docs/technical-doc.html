@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BytePlus Voice Chat v2.0 - Dokumentasi Teknis</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #f0883e;
+  --red: #f85149;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  padding: 0;
+}
+.container { max-width: 960px; margin: 0 auto; padding: 40px 20px; }
+h1 { font-size: 2.2em; margin-bottom: 8px; color: var(--accent); }
+h2 { font-size: 1.5em; margin: 40px 0 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+h3 { font-size: 1.2em; margin: 24px 0 12px; color: var(--text); }
+p { margin-bottom: 12px; color: var(--text); }
+.muted { color: var(--muted); }
+code {
+  background: #1c2128;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 0.9em;
+  color: var(--orange);
+}
+pre {
+  background: #1c2128;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+pre code {
+  background: none;
+  padding: 0;
+  color: var(--text);
+}
+table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+th { background: var(--card); color: var(--accent); font-weight: 600; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+.badge-green { background: rgba(63,185,80,0.2); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+.badge-orange { background: rgba(240,136,62,0.2); color: var(--orange); border: 1px solid rgba(240,136,62,0.3); }
+.badge-blue { background: rgba(88,166,255,0.2); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 16px 0;
+}
+.diagram {
+  background: #1c2128;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  font-family: monospace;
+  font-size: 0.85em;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>BytePlus Voice Chat v2.0</h1>
+<p class="muted">Dokumentasi Teknis - Arsitektur, Protocol, dan Implementasi</p>
+
+<hr>
+
+<h2>1. Overview</h2>
+<p>Aplikasi voice chat real-time dengan pipeline paralel yang menggabungkan tiga layanan BytePlus:</p>
+<table>
+<tr><th>Komponen</th><th>Layanan</th><th>Endpoint</th><th>Protokol</th></tr>
+<tr><td>STT</td><td>BytePlus Speech-to-Text 2.0</td><td><code>wss://voice.ap-southeast-1.bytepluses.com/api/v3/sauc/bigmodel_nostream</code></td><td>WebSocket Binary</td></tr>
+<tr><td>AI</td><td>BytePlus ModelArk</td><td><code>https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions</code></td><td>HTTP SSE</td></tr>
+<tr><td>TTS</td><td>BytePlus Text-to-Speech 2.0</td><td><code>wss://voice.ap-southeast-1.bytepluses.com/api/v3/tts/bidirection</code></td><td>WebSocket Binary</td></tr>
+</table>
+
+<h2>2. Arsitektur Pipeline</h2>
+<div class="diagram">Browser (Mic 16kHz PCM)
+    │
+    ▼ WebSocket
+┌─────────────────────────────────────────────────┐
+│ FastAPI Server (Python asyncio)                  │
+│                                                   │
+│  ┌──────────┐  text  ┌──────────┐  sentences     │
+│  │ STT 2.0  │ ─────► │ ModelArk │ ──────────┐   │
+│  │ Stream   │        │ SSE      │            │   │
+│  └──────────┘        └──────────┘            ▼   │
+│                              ┌──────────────────┐ │
+│                              │ TTS 2.0 Stream   │ │
+│                              │ (single session) │ │
+│                              └────────┬─────────┘ │
+│                                       │ audio     │
+│                    PCM chunks ◄──────┘            │
+└───────────────────────────────────────────────────┘
+    │ WebSocket (base64 PCM chunks + JSON text)
+    ▼
+Browser (Web Audio API - gapless playback)</div>
+
+<h3>2.1. Paralel Pipeline</h3>
+<p>AI streaming dan TTS berjalan secara paralel menggunakan <code>asyncio.Queue</code>:</p>
+<ol>
+<li><strong>AI Producer</strong>: Konsumsi SSE tokens dari ModelArk, kirim ke browser untuk display, pecah menjadi kalimat, push ke <code>text_queue</code></li>
+<li><strong>TTS Consumer</strong>: Konsumsi kalimat dari <code>text_queue</code> via async generator, kirim ke TTS sebagai <code>TaskRequest</code>, yield audio chunks ke browser</li>
+</ol>
+<p>Keduanya berjalan dalam <code>asyncio.gather()</code> sehingga audio kalimat pertama mulai diputar saat AI masih generate kalimat berikutnya.</p>
+
+<h2>3. Binary Protocol</h2>
+
+<h3>3.1. Frame Format</h3>
+<pre><code>Byte 0: (protocol_version &lt;&lt; 4) | header_size
+Byte 1: (message_type &lt;&lt; 4) | message_type_specific_flags
+Byte 2: (serialization &lt;&lt; 4) | compression
+Byte 3: reserved (0x00)
+[4-7]: Optional fields (event, session_id, etc.)
+[...]: Payload size (4 bytes) + Payload</code></pre>
+
+<h3>3.2. STT Flags</h3>
+<table>
+<tr><th>Flag</th><th>Bit</th><th>Deskripsi</th></tr>
+<tr><td><code>0b0001</code></td><td>bit0</td><td>Has sequence/event field (4 bytes after header)</td></tr>
+<tr><td><code>0b0010</code></td><td>bit1</td><td>Last audio packet</td></tr>
+</table>
+
+<h3>3.3. TTS 2.0 Event Numbers</h3>
+<table>
+<tr><th>Direction</th><th>Event</th><th>Number</th><th>Description</th></tr>
+<tr><td>Client</td><td>StartConnection</td><td>1</td><td>Inisialisasi WebSocket connection</td></tr>
+<tr><td>Server</td><td>ConnectionStarted</td><td>50</td><td>Connection berhasil</td></tr>
+<tr><td>Client</td><td>StartSession</td><td>100</td><td>Mulai TTS session dengan speaker config</td></tr>
+<tr><td>Server</td><td>SessionStarted</td><td>150</td><td>Session siap menerima text</td></tr>
+<tr><td>Client</td><td>TaskRequest</td><td>200</td><td>Kirim text untuk di-synthesize</td></tr>
+<tr><td>Server</td><td>TTSResponse</td><td>352</td><td>Audio chunk</td></tr>
+<tr><td>Client</td><td>SessionFinish</td><td>102</td><td>Akhiri session</td></tr>
+<tr><td>Server</td><td>SessionFinished</td><td>152</td><td>Session berakhir</td></tr>
+<tr><td>Client</td><td>FinishConnection</td><td>2</td><td>Tutup connection</td></tr>
+</table>
+
+<h3>3.4. TTS Flag</h3>
+<table>
+<tr><th>Flag</th><th>Hex</th><th>Deskripsi</th></tr>
+<tr><td><code>TTS_FLAG_WITH_EVENT</code></td><td>0x04</td><td>Event field (4 bytes) present in binary frame (bit2)</td></tr>
+</table>
+
+<h3>3.5. TTS Frame Building</h3>
+<div class="card">
+<h3>Connect Event (StartConnection/FinishConnection)</h3>
+<pre><code>[Header 4B (flags=0x04)] [Event 4B] [Payload Size 4B] [Payload JSON]</code></pre>
+</div>
+<div class="card">
+<h3>Session Event (StartSession/TaskRequest/FinishSession)</h3>
+<pre><code>[Header 4B (flags=0x04)] [Event 4B] [SessionID Size 4B] [SessionID] [Payload Size 4B] [Payload JSON]</code></pre>
+</div>
+
+<h2>4. TTS Session Reuse</h2>
+<p>Sesuai best practice dokumentasi BytePlus TTS 2.0:</p>
+<div class="card">
+<p><em>"推荐将流式输出的文本直接输入该接口，而不要额外增加切句或者攒句的逻辑"</em><br>
+<span class="muted">Masukkan teks streaming langsung ke TTS, jangan pecah kalimat sendiri.</span></p>
+</div>
+<p>Implementasi: satu WebSocket connection + satu session untuk seluruh AI response. Multiple <code>TaskRequest</code> dikirim paralel dengan penerimaan audio.</p>
+
+<div class="diagram">StartConnection → ConnectionStarted
+StartSession → SessionStarted
+TaskRequest("Halo!") → audio chunks...
+TaskRequest("Ada yang bisa...") → audio chunks...
+FinishSession → SessionFinished
+FinishConnection</div>
+
+<h2>5. Audio Playback (Frontend)</h2>
+
+<h3>5.1. Format: PCM</h3>
+<p>TTS output: PCM 16-bit signed, mono, 24kHz. Dipilih karena:</p>
+<ul>
+<li>Tidak ada framing overhead (vs MP3 yang butuh frame alignment)</li>
+<li>Bisa di-append tanpa batas</li>
+<li>Latency minimal (no codec decode)</li>
+</ul>
+
+<h3>5.2. Web Audio API - Gapless Playback</h3>
+<pre><code>// PCM Int16 → Float32
+const audioBuffer = playbackCtx.createBuffer(1, sampleCount, ttsSampleRate);
+const channelData = audioBuffer.getChannelData(0);
+for (let i = 0; i &lt; sampleCount; i++) {
+    channelData[i] = dataView.getInt16(i * 2, true) / 32768.0;
+}
+
+// Schedule dengan precise timing (zero gap)
+sourceNode.start(nextPlayTime);
+nextPlayTime += audioBuffer.duration;</code></pre>
+
+<h3>5.3. Fallback: WAV Blob</h3>
+<p>Jika <code>AudioContext</code> dengan 24kHz tidak didukung, PCM dibungkus dengan WAV header (44 bytes) dan diputar via <code>&lt;audio&gt;</code> element.</p>
+
+<h2>6. Bahasa Indonesia Enforcement</h2>
+<table>
+<tr><th>Level</th><th>Konfigurasi</th><th>Implementasi</th></tr>
+<tr><td>STT</td><td><code>STT_LANGUAGE=id-ID</code></td><td>Parameter <code>language</code> di STT request</td></tr>
+<tr><td>AI</td><td>System prompt</td><td>"Selalu jawab dalam Bahasa Indonesia"</td></tr>
+<tr><td>TTS</td><td><code>TTS_EXPLICIT_LANGUAGE=id</code></td><td><code>additions.explicit_language = "id"</code> di StartSession</td></tr>
+<tr><td>Voice</td><td><code>zh_female_vv_uranus_bigtts</code></td><td>Vivi 2.0 - supports Indonesian</td></tr>
+<tr><td>UI</td><td>Bahasa Indonesia</td><td>Semua teks interface dalam Bahasa Indonesia</td></tr>
+</table>
+
+<h2>7. API Endpoints</h2>
+<table>
+<tr><th>Endpoint</th><th>Method</th><th>Deskripsi</th></tr>
+<tr><td><code>/</code></td><td>GET</td><td>Frontend (index.html)</td></tr>
+<tr><td><code>/api/health</code></td><td>GET</td><td>Health check</td></tr>
+<tr><td><code>/api/config</code></td><td>GET</td><td>Konfigurasi publik (speaker, format, sample_rate)</td></tr>
+<tr><td><code>/ws/voice-chat</code></td><td>WebSocket</td><td>Real-time bidirectional voice chat</td></tr>
+</table>
+
+<h3>7.1. WebSocket Message Types</h3>
+<table>
+<tr><th>Direction</th><th>Type</th><th>Fields</th><th>Deskripsi</th></tr>
+<tr><td>Client→Server</td><td><code>audio</code></td><td><code>data</code> (base64 PCM 16kHz)</td><td>Audio dari microphone</td></tr>
+<tr><td>Client→Server</td><td><code>text</code></td><td><code>text</code></td><td>Text input</td></tr>
+<tr><td>Server→Client</td><td><code>status</code></td><td><code>status</code>, <code>message</code></td><td>Status update (thinking, speaking, ready)</td></tr>
+<tr><td>Server→Client</td><td><code>transcription</code></td><td><code>text</code></td><td>STT result</td></tr>
+<tr><td>Server→Client</td><td><code>ai_response_start</code></td><td>-</td><td>AI mulai generate</td></tr>
+<tr><td>Server→Client</td><td><code>ai_response_chunk</code></td><td><code>text</code></td><td>AI token (streaming)</td></tr>
+<tr><td>Server→Client</td><td><code>ai_response_done</code></td><td><code>text</code></td><td>AI selesai (full text)</td></tr>
+<tr><td>Server→Client</td><td><code>audio_start</code></td><td><code>format</code>, <code>sample_rate</code></td><td>Audio mulai dikirim</td></tr>
+<tr><td>Server→Client</td><td><code>audio_chunk</code></td><td><code>data</code> (base64)</td><td>Audio chunk PCM</td></tr>
+<tr><td>Server→Client</td><td><code>audio_end</code></td><td>-</td><td>Audio selesai</td></tr>
+<tr><td>Server→Client</td><td><code>error</code></td><td><code>message</code></td><td>Error message</td></tr>
+</table>
+
+<h2>8. Testing</h2>
+<p>76 unit tests mencakup:</p>
+<table>
+<tr><th>Test File</th><th>Coverage</th></tr>
+<tr><td><code>test_binary_protocol.py</code></td><td>Frame building (STT &amp; TTS), response parsing, gzip, round-trip, edge cases</td></tr>
+<tr><td><code>test_stt_client.py</code></td><td>STT client init, payload building, transcription flow</td></tr>
+<tr><td><code>test_tts_client.py</code></td><td>TTS client init, session payload, synthesize streaming, error handling</td></tr>
+<tr><td><code>test_chat_client.py</code></td><td>ModelArk client, SSE parsing, streaming</td></tr>
+<tr><td><code>test_server.py</code></td><td>API endpoints, WebSocket flow, pipeline</td></tr>
+</table>
+<pre><code>pip install -r requirements-test.txt
+python -m pytest tests/ -v</code></pre>
+
+<h2>9. File Structure</h2>
+<pre><code>byteplus-voice-chat/
+├── server.py              # FastAPI server + pipeline paralel
+├── binary_protocol.py     # Binary WebSocket protocol (STT & TTS 2.0)
+├── stt_client.py          # STT 2.0 client
+├── tts_client.py          # TTS 2.0 client (session reuse)
+├── chat_client.py         # ModelArk client (SSE streaming)
+├── requirements.txt       # Dependencies
+├── requirements-test.txt  # Test dependencies
+├── pytest.ini
+├── .env.example
+├── .gitignore
+├── start.sh / stop.sh     # Linux/macOS scripts
+├── start.ps1 / stop.ps1   # Windows scripts
+├── static/
+│   ├── index.html
+│   ├── app.js             # Frontend (Web Audio API, streaming)
+│   └── style.css
+├── tests/
+│   ├── conftest.py        # Fixtures & mock builders
+│   ├── test_binary_protocol.py
+│   ├── test_chat_client.py
+│   ├── test_server.py
+│   ├── test_stt_client.py
+│   └── test_tts_client.py
+├── docs/
+│   └── technical-doc.html # Dokumentasi ini
+└── README.md</code></pre>
+
+<hr>
+<p class="muted">BytePlus Voice Chat v2.0 - Generated 2026-08-26</p>
+
+</div>
+</body>
+</html>

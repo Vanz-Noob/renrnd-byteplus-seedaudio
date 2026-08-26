@@ -1,0 +1,14 @@
+# BytePlus Voice Chat - Python Dependencies
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# WebSocket client untuk STT & TTS
+websockets>=12.0
+
+# HTTP client untuk ModelArk Chat API
+httpx>=0.25.0
+
+# Environment variables
+python-dotenv>=1.0.0

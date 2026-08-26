@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BytePlus Voice Chat</title>
+    <link rel="stylesheet" href="/static/style.css?v=3">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" x2="12" y1="19" y2="22"/>
+                    </svg>
+                    <h1>BytePlus Voice Chat</h1>
+                </div>
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span class="status-text" id="statusText">Connecting...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Chat Area -->
+        <main class="chat-area" id="chatArea">
+            <div class="messages-container" id="messagesContainer">
+                <!-- Welcome message -->
+                <div class="message ai-message">
+                    <div class="message-avatar">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 8V4H8"/>
+                            <rect width="16" height="12" x="4" y="8" rx="2"/>
+                            <path d="M2 14h2"/>
+                            <path d="M20 14h2"/>
+                            <path d="M15 13v2"/>
+                            <path d="M9 13v2"/>
+                        </svg>
+                    </div>
+                    <div class="message-content">
+                        <div class="message-bubble">
+                            Halo! Saya adalah asisten voice chat BytePlus. Tekan tombol mikrofon dan mulai berbicara, atau ketik pesan di bawah. Saya akan merespons dengan suara!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Typing indicator -->
+            <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                <div class="message-avatar small">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 8V4H8"/>
+                        <rect width="16" height="12" x="4" y="8" rx="2"/>
+                    </svg>
+                </div>
+                <div class="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            </div>
+        </main>
+
+        <!-- Controls Area -->
+        <footer class="controls-area">
+            <!-- Text input -->
+            <div class="text-input-container">
+                <input
+                    type="text"
+                    id="textInput"
+                    placeholder="Ketik pesan atau gunakan mikrofon..."
+                    autocomplete="off"
+                >
+                <button id="sendTextBtn" class="send-btn" title="Kirim teks">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m22 2-7 20-4-9-9-4Z"/>
+                        <path d="M22 2 11 13"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Voice controls -->
+            <div class="voice-controls">
+                <button id="micButton" class="mic-button" title="Tahan untuk bicara (Push to Talk)">
+                    <svg class="mic-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" x2="12" y1="19" y2="22"/>
+                    </svg>
+                    <svg class="stop-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                        <rect width="14" height="14" x="5" y="5" rx="2"/>
+                    </svg>
+                </button>
+                <div class="mic-label" id="micLabel">Tahan untuk bicara</div>
+            </div>
+
+            <!-- Audio player (hidden) -->
+            <audio id="audioPlayer" autoplay></audio>
+        </footer>
+    </div>
+
+    <script src="/static/app.js?v=3"></script>
+</body>
+</html>
