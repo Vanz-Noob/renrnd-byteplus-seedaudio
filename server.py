@@ -159,6 +159,7 @@ async def voice_chat(ws: WebSocket):
     3. {"type": "stop_recording"} - Stop rekaman, proses STT → AI → TTS
     4. {"type": "text", "text": "..."} - Kirim teks langsung (tanpa STT)
     5. {"type": "clear_history"} - Bersihkan conversation history
+    6. {"type": "interrupt"} - Cancel pipeline yang sedang berjalan (TTS/AI)
 
     Protocol pesan ke client (JSON):
     1. {"type": "status", "status": "...", "message": "..."}
@@ -213,6 +214,7 @@ async def voice_chat(ws: WebSocket):
     )
 
     audio_buffer = bytearray()
+    current_task = None  # Track ongoing pipeline task (for interrupt)
 
     logger.info("Voice chat WebSocket connected")
 
@@ -234,14 +236,33 @@ async def voice_chat(ws: WebSocket):
                     audio_buffer.extend(audio_bytes)
 
             elif msg_type == "stop_recording":
-                await process_voice_input(ws, audio_buffer, stt_client, chat_client, tts_client)
+                # Jalankan pipeline sebagai background task (bisa di-interrupt)
+                audio_copy = bytes(audio_buffer)
                 audio_buffer.clear()
+                current_task = asyncio.create_task(
+                    process_voice_input(ws, audio_copy, stt_client, chat_client, tts_client)
+                )
 
             elif msg_type == "text":
                 # Mode teks langsung (tanpa STT)
                 text = data.get("text", "").strip()
                 if text:
-                    await process_text_input(ws, text, chat_client, tts_client)
+                    current_task = asyncio.create_task(
+                        process_text_input(ws, text, chat_client, tts_client)
+                    )
+
+            elif msg_type == "interrupt":
+                # Cancel pipeline yang sedang berjalan (TTS/AI)
+                if current_task and not current_task.done():
+                    logger.info("Interrupt: cancelling current pipeline task")
+                    current_task.cancel()
+                    try:
+                        await current_task
+                    except asyncio.CancelledError:
+                        pass
+                    # Kirim audio_end untuk finalize state di client
+                    await ws.send_json({"type": "audio_end"})
+                await ws.send_json({"type": "status", "status": "ready", "message": "Siap"})
 
             elif msg_type == "clear_history":
                 chat_client.clear_history()
@@ -252,6 +273,8 @@ async def voice_chat(ws: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
+        if current_task and not current_task.done():
+            current_task.cancel()
     except Exception as e:
         logger.error("WebSocket error: %s", e, exc_info=True)
         try:
@@ -262,7 +285,7 @@ async def voice_chat(ws: WebSocket):
 
 async def process_voice_input(
     ws: WebSocket,
-    audio_buffer: bytearray,
+    audio_buffer: bytes,
     stt_client: STTClient,
     chat_client: ChatClient,
     tts_client: TTSClient,
@@ -411,7 +434,15 @@ async def pipeline_ai_to_tts(
     ai_task = asyncio.create_task(ai_producer())
     tts_task = asyncio.create_task(tts_consumer())
 
-    await asyncio.gather(ai_task, tts_task)
+    try:
+        await asyncio.gather(ai_task, tts_task)
+    except asyncio.CancelledError:
+        # Pipeline di-interrupt oleh user - cancel sub-tasks
+        logger.info("Pipeline cancelled by interrupt")
+        ai_task.cancel()
+        tts_task.cancel()
+        await asyncio.gather(ai_task, tts_task, return_exceptions=True)
+        raise
 
     await ws.send_json({"type": "ai_response_done", "text": response_holder["text"]})
     await ws.send_json({"type": "status", "status": "ready", "message": "Siap"})

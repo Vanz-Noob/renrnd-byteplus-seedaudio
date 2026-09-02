@@ -19,6 +19,7 @@ const state = {
     isConnected: false,
     isRecording: false,
     isProcessing: false,
+    isSpeaking: false,         // TTS sedang berbicara (bisa di-interrupt)
     audioContext: null,
     mediaStream: null,
     scriptProcessor: null,
@@ -141,6 +142,7 @@ function handleWebSocketMessage(data) {
 
         case 'audio_end':
             // Audio selesai
+            state.isSpeaking = false;
             finishAudioPlayback();
             break;
 
@@ -172,8 +174,12 @@ function handleStatusMessage(data) {
         showTypingIndicator(false);
     }
 
-    if (data.status === 'ready') {
+    if (data.status === 'speaking') {
+        state.isSpeaking = true;
+        updateMicButton();
+    } else if (data.status === 'ready') {
         state.isProcessing = false;
+        state.isSpeaking = false;
         updateMicButton();
     }
 }
@@ -244,6 +250,7 @@ let playbackCtx = null;
 let nextPlayTime = 0;
 let isPlayingAudio = false;
 let useWebAudio = false;
+let isInterrupted = false;   // Flag: tolak audio chunks setelah interrupt
 
 // Fallback: WAV blob queue (untuk PCM jika Web Audio API tidak tersedia)
 let audioPlaybackQueue = [];
@@ -253,6 +260,7 @@ function startAudioPlayback(format) {
     audioFormat = format || 'pcm';
     audioPlaybackQueue = [];
     isPlayingAudio = false;
+    isInterrupted = false;   // Reset: audio baru dimulai
 
     if (audioFormat === 'pcm') {
         // Coba Web Audio API dengan sample rate TTS
@@ -274,6 +282,12 @@ function startAudioPlayback(format) {
 }
 
 function addAudioChunk(base64Data) {
+    // Tolak chunks jika sedang di-interrupt (audio chunks masih dalam flight)
+    if (isInterrupted) {
+        console.log('Audio chunk discarded (interrupted)');
+        return;
+    }
+
     // Decode base64 ke binary
     const binaryStr = atob(base64Data);
     const len = binaryStr.length;
@@ -430,10 +444,96 @@ function finishAudioPlayback() {
 }
 
 // ============================================
+// Interrupt - Hentikan TTS saat user mulai bicara
+// ============================================
+
+function playInterruptSound() {
+    // Mainkan suara beep pendek sebagai sinyal interrupt
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioContextClass();
+
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        oscillator.type = 'sine';
+        oscillator.frequency.value = 880; // A5
+
+        // Envelope: quick attack, fast decay
+        const now = ctx.currentTime;
+        gainNode.gain.setValueAtTime(0, now);
+        gainNode.gain.linearRampToValueAtTime(0.3, now + 0.01);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        oscillator.start(now);
+        oscillator.stop(now + 0.15);
+
+        oscillator.onended = () => {
+            ctx.close();
+        };
+
+        console.log('Interrupt sound played');
+    } catch (e) {
+        console.warn('Could not play interrupt sound:', e);
+    }
+}
+
+function stopAudioPlayback() {
+    // Set flag: tolak semua audio chunks yang masih dalam flight
+    isInterrupted = true;
+
+    // Hentikan Web Audio API playback
+    if (playbackCtx) {
+        try {
+            playbackCtx.close();
+        } catch (e) {
+            console.warn('Error closing playback context:', e);
+        }
+        playbackCtx = null;
+    }
+
+    // Hentikan audio element yang sedang play
+    if (currentAudioEl) {
+        try {
+            currentAudioEl.pause();
+            currentAudioEl.src = '';
+        } catch (e) {}
+        currentAudioEl = null;
+    }
+
+    // Clear queues
+    audioPlaybackQueue = [];
+    isPlayingAudio = false;
+    useWebAudio = false;
+}
+
+function interruptTTS() {
+    console.log('Interrupting TTS playback');
+    // 1. Stop TTS audio terlebih dahulu
+    stopAudioPlayback();
+    // 2. Mainkan suara interrupt setelah TTS berhenti
+    playInterruptSound();
+    // 3. Kirim sinyal interrupt ke server
+    sendJSON({ type: 'interrupt' });
+}
+
+// ============================================
 // Audio Recording (Push-to-Talk)
 // ============================================
 async function startRecording() {
-    if (state.isProcessing) return;
+    if (state.isProcessing) {
+        // Izinkan interrupt saat TTS sedang berbicara
+        if (state.isSpeaking) {
+            interruptTTS();
+            state.isProcessing = false;
+            state.isSpeaking = false;
+        } else {
+            return; // Tidak bisa interrupt saat STT/thinking
+        }
+    }
 
     try {
         // Request microphone access dengan konfigurasi optimal untuk speech
@@ -617,10 +717,15 @@ function updateMicButton() {
         dom.micButton.classList.remove('recording');
         dom.micButton.querySelector('.mic-icon').style.display = 'block';
         dom.micButton.querySelector('.stop-icon').style.display = 'none';
-        dom.micLabel.textContent = state.isProcessing ? 'Memproses...' : 'Tahan untuk bicara';
+        if (state.isSpeaking) {
+            dom.micLabel.textContent = 'Tahan untuk bicara (interrupt)';
+        } else {
+            dom.micLabel.textContent = state.isProcessing ? 'Memproses...' : 'Tahan untuk bicara';
+        }
     }
 
-    dom.micButton.disabled = state.isProcessing;
+    // Enable mic button saat TTS speaking (untuk interrupt)
+    dom.micButton.disabled = state.isProcessing && !state.isSpeaking;
     dom.textInput.disabled = state.isProcessing;
     dom.sendTextBtn.disabled = state.isProcessing;
 }
@@ -750,7 +855,9 @@ function sendTextMessage() {
 
 // Keyboard shortcut: Space to talk (when not typing)
 document.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && document.activeElement !== dom.textInput && !state.isProcessing) {
+    if (e.code === 'Space' && document.activeElement !== dom.textInput) {
+        // Izinkan interrupt saat TTS speaking, block saat processing lainnya
+        if (state.isProcessing && !state.isSpeaking) return;
         e.preventDefault();
         if (!state.isRecording) {
             startRecording();
